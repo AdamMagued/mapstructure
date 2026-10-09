@@ -2794,3 +2794,146 @@ func uintPtr(v uint) *uint                    { return &v }
 func boolPtr(v bool) *bool                    { return &v }
 func floatPtr(v float64) *float64             { return &v }
 func interfacePtr(v interface{}) *interface{} { return &v }
+
+func TestDecode_MultiplePointerIndirectionToMap(t *testing.T) {
+	t.Parallel()
+
+	type SimpleStruct struct {
+		Foo string `mapstructure:"foo"`
+		Bar int    `mapstructure:"bar"`
+	}
+
+	s := &SimpleStruct{
+		Foo: "hello",
+		Bar: 42,
+	}
+	ps := &s
+	pps := &ps
+
+	expected := map[string]interface{}{
+		"foo": "hello",
+		"bar": 42,
+	}
+
+	// Test double pointer indirection to struct.
+	{
+		var result map[string]interface{}
+		if err := Decode(ps, &result); err != nil {
+			t.Fatalf("unexpected error decoding double pointer struct: %s", err)
+		}
+		if !reflect.DeepEqual(result, expected) {
+			t.Fatalf("expected %#v, got %#v", expected, result)
+		}
+	}
+
+	// Test triple pointer indirection to struct (reproducing issue #347).
+	{
+		var result map[string]interface{}
+		if err := Decode(pps, &result); err != nil {
+			t.Fatalf("unexpected error decoding triple pointer struct: %s", err)
+		}
+		if !reflect.DeepEqual(result, expected) {
+			t.Fatalf("expected %#v, got %#v", expected, result)
+		}
+	}
+
+	// Test double pointer indirection to map.
+	{
+		sourceMap := map[string]interface{}{
+			"foo": "hello",
+			"bar": 42,
+		}
+		pMap := &sourceMap
+		ppMap := &pMap
+
+		var result map[string]interface{}
+		if err := Decode(ppMap, &result); err != nil {
+			t.Fatalf("unexpected error decoding double pointer map: %s", err)
+		}
+		if !reflect.DeepEqual(result, expected) {
+			t.Fatalf("expected %#v, got %#v", expected, result)
+		}
+	}
+}
+
+func TestDecode_MultiplePointerIndirectionNestedStructToMap(t *testing.T) {
+	t.Parallel()
+
+	type Child struct {
+		Name string `mapstructure:"name"`
+	}
+
+	c := &Child{Name: "nested_value"}
+	pc := &c
+
+	type Parent struct {
+		Child **Child `mapstructure:"child"`
+	}
+
+	p := Parent{Child: pc}
+	var result map[string]interface{}
+	if err := Decode(p, &result); err != nil {
+		t.Fatalf("unexpected error decoding nested double pointer struct: %s", err)
+	}
+
+	expected := map[string]interface{}{
+		"child": map[string]interface{}{
+			"name": "nested_value",
+		},
+	}
+	if !reflect.DeepEqual(result, expected) {
+		t.Fatalf("expected %#v, got %#v", expected, result)
+	}
+}
+
+func TestDecode_MultiplePointerIndirectionSquashToMap(t *testing.T) {
+	t.Parallel()
+
+	type Child struct {
+		Name string `mapstructure:"name"`
+	}
+
+	c := &Child{Name: "nested_value"}
+	pc := &c
+
+	type Parent struct {
+		Child **Child `mapstructure:",squash"`
+		Role  string  `mapstructure:"role"`
+	}
+
+	p := Parent{
+		Child: pc,
+		Role:  "admin",
+	}
+	var result map[string]interface{}
+	if err := Decode(p, &result); err != nil {
+		t.Fatalf("unexpected error decoding squashed double pointer struct: %s", err)
+	}
+
+	expected := map[string]interface{}{
+		"name": "nested_value",
+		"role": "admin",
+	}
+	if !reflect.DeepEqual(result, expected) {
+		t.Fatalf("expected %#v, got %#v", expected, result)
+	}
+}
+
+func TestDecode_MultiplePointerIndirectionError(t *testing.T) {
+	t.Parallel()
+
+	val := 123
+	pval := &val
+	ppval := &pval
+
+	var result map[string]interface{}
+	err := Decode(ppval, &result)
+	if err == nil {
+		t.Fatal("expected error decoding pointer to int into map, got nil")
+	}
+
+	expectedErr := "expected a map, got 'int'"
+	if !strings.Contains(err.Error(), expectedErr) {
+		t.Fatalf("expected error containing %q, got %q", expectedErr, err.Error())
+	}
+}

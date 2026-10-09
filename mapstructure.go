@@ -813,6 +813,12 @@ func (d *Decoder) decodeMap(name string, data interface{}, val reflect.Value) er
 
 	// Check input type and based on the input type jump to the proper func
 	dataVal := reflect.Indirect(reflect.ValueOf(data))
+	for dataVal.IsValid() && dataVal.Kind() == reflect.Ptr {
+		if dataVal.IsNil() {
+			break
+		}
+		dataVal = dataVal.Elem()
+	}
 	switch dataVal.Kind() {
 	case reflect.Map:
 		return d.decodeMapFromMap(name, dataVal, val, valMap)
@@ -948,7 +954,10 @@ func (d *Decoder) decodeMapFromStruct(name string, dataVal reflect.Value, val re
 			squash = squash || strings.Index(tagValue[index+1:], "squash") != -1
 			if squash {
 				// When squashing, the embedded type can be a pointer to a struct.
-				if v.Kind() == reflect.Ptr && v.Elem().Kind() == reflect.Struct {
+				for v.Kind() == reflect.Ptr {
+					if v.IsNil() {
+						break
+					}
 					v = v.Elem()
 				}
 
@@ -1530,10 +1539,16 @@ func isStructTypeConvertibleToMap(typ reflect.Type, checkMapstructureTags bool, 
 }
 
 func dereferencePtrToStructIfNeeded(v reflect.Value, tagName string) reflect.Value {
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
+	deref := v
+	for deref.Kind() == reflect.Ptr {
+		if deref.IsNil() {
+			return v
+		}
+		deref = deref.Elem()
+	}
+	if deref.Kind() != reflect.Struct {
 		return v
 	}
-	deref := v.Elem()
 	derefT := deref.Type()
 	if isStructTypeConvertibleToMap(derefT, true, tagName) {
 		return deref
