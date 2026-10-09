@@ -1319,7 +1319,8 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 			remain := false
 
 			// We always parse the tags cause we're looking for other tags too
-			tagParts := strings.Split(fieldType.Tag.Get(d.config.TagName), ",")
+			tagValue := fieldType.Tag.Get(d.config.TagName)
+			tagParts := strings.Split(tagValue, ",")
 			for _, tag := range tagParts[1:] {
 				if tag == "squash" {
 					squash = true
@@ -1332,6 +1333,10 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				}
 			}
 
+			if tagParts[0] == "-" {
+				continue
+			}
+
 			if squash {
 				if fieldVal.Kind() != reflect.Struct {
 					errors = appendErrors(errors,
@@ -1339,6 +1344,10 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				} else {
 					structs = append(structs, fieldVal)
 				}
+				continue
+			}
+
+			if tagValue == "" && d.config.IgnoreUntaggedFields {
 				continue
 			}
 
@@ -1358,9 +1367,17 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 		fieldName := field.Name
 
 		tagValue := field.Tag.Get(d.config.TagName)
-		tagValue = strings.SplitN(tagValue, ",", 2)[0]
-		if tagValue != "" {
-			fieldName = tagValue
+		tagParts := strings.Split(tagValue, ",")
+		if tagParts[0] == "-" {
+			continue
+		}
+
+		if tagValue == "" && d.config.IgnoreUntaggedFields {
+			continue
+		}
+
+		if tagParts[0] != "" {
+			fieldName = tagParts[0]
 		}
 
 		rawMapKey := reflect.ValueOf(fieldName)
