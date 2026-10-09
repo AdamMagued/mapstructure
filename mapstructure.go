@@ -905,8 +905,66 @@ func (d *Decoder) decodeMapFromMap(name string, dataVal reflect.Value, val refle
 	return nil
 }
 
+func (d *Decoder) outerFieldMatches(k interface{}, outerKeys map[string]struct{}) bool {
+	strKey, ok := k.(string)
+	if !ok {
+		strKey = fmt.Sprint(k)
+	}
+	if _, exists := outerKeys[strKey]; exists {
+		return true
+	}
+	matchName := d.config.MatchName
+	if matchName == nil {
+		matchName = strings.EqualFold
+	}
+	for ok := range outerKeys {
+		if matchName(strKey, ok) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Decoder) decodeMapFromStruct(name string, dataVal reflect.Value, val reflect.Value, valMap reflect.Value) error {
 	typ := dataVal.Type()
+	outerKeys := make(map[string]struct{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.PkgPath != "" {
+			continue
+		}
+
+		tagValue := f.Tag.Get(d.config.TagName)
+		if tagValue == "" && d.config.IgnoreUntaggedFields {
+			continue
+		}
+
+		v := dataVal.Field(i)
+		squash := d.config.Squash && v.Kind() == reflect.Struct && f.Anonymous
+
+		v = dereferencePtrToStructIfNeeded(v, d.config.TagName)
+
+		keyName := f.Name
+		if index := strings.Index(tagValue, ","); index != -1 {
+			if tagValue[:index] == "-" {
+				continue
+			}
+			squash = squash || strings.Index(tagValue[index+1:], "squash") != -1
+			if keyNameTagValue := tagValue[:index]; keyNameTagValue != "" {
+				keyName = keyNameTagValue
+			}
+		} else if len(tagValue) > 0 {
+			if tagValue == "-" {
+				continue
+			}
+			keyName = tagValue
+		}
+
+		if !squash {
+			outerKeys[keyName] = struct{}{}
+		}
+	}
+
 	for i := 0; i < typ.NumField(); i++ {
 		// Get the StructField first since this is a cheap operation. If the
 		// field is unexported, then ignore it.
@@ -997,6 +1055,9 @@ func (d *Decoder) decodeMapFromStruct(name string, dataVal reflect.Value, val re
 
 			if squash {
 				for _, k := range vMap.MapKeys() {
+					if d.outerFieldMatches(k.Interface(), outerKeys) {
+						continue
+					}
 					valMap.SetMapIndex(k, vMap.MapIndex(k))
 				}
 			} else {
@@ -1299,7 +1360,9 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 	// we are keeping track of remaining values.
 	var remainField *field
 
+	outerFields := make(map[string]struct{})
 	fields := []field{}
+	isOuter := true
 	for len(structs) > 0 {
 		structVal := structs[0]
 		structs = structs[1:]
@@ -1342,6 +1405,20 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				continue
 			}
 
+			fieldName := fieldType.Name
+			tagValue := strings.SplitN(fieldType.Tag.Get(d.config.TagName), ",", 2)[0]
+			if tagValue != "" {
+				fieldName = tagValue
+			}
+
+			if isOuter {
+				if fieldType.PkgPath == "" && fieldName != "-" {
+					outerFields[fieldName] = struct{}{}
+				}
+			} else if d.outerFieldMatches(fieldName, outerFields) {
+				continue
+			}
+
 			// Build our field
 			if remain {
 				remainField = &field{fieldType, fieldVal}
@@ -1350,6 +1427,7 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				fields = append(fields, field{fieldType, fieldVal})
 			}
 		}
+		isOuter = false
 	}
 
 	// for fieldType, field := range fields {

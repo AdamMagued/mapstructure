@@ -106,6 +106,63 @@ type SquashOnNonStructType struct {
 	InvalidSquashType int `mapstructure:",squash"`
 }
 
+type SquashConflictChild struct {
+	Id   string
+	City string
+}
+
+type SquashConflictOuterFirst struct {
+	Id    string
+	Child SquashConflictChild `mapstructure:",squash"`
+}
+
+type SquashConflictOuterLast struct {
+	Child SquashConflictChild `mapstructure:",squash"`
+	Id    string
+}
+
+type SquashConflictPointerChild struct {
+	Id    string
+	Child *SquashConflictChild `mapstructure:",squash"`
+}
+
+type SquashConflictGrandChild struct {
+	Id      string
+	Country string
+}
+
+type SquashConflictMiddle struct {
+	Id         string
+	GrandChild SquashConflictGrandChild `mapstructure:",squash"`
+}
+
+type SquashConflictTopNoId struct {
+	Middle SquashConflictMiddle `mapstructure:",squash"`
+}
+
+type SquashConflictTopWithId struct {
+	Id     string
+	Middle SquashConflictMiddle `mapstructure:",squash"`
+}
+
+type SquashConflictTaggedChild struct {
+	Id string `mapstructure:"my_id"`
+}
+
+type SquashConflictTaggedOuter struct {
+	Id    string                     `mapstructure:"my_id"`
+	Child SquashConflictTaggedChild `mapstructure:",squash"`
+}
+
+type SquashConflictDifferentTypesChild struct {
+	Id int
+}
+
+type SquashConflictDifferentTypesOuter struct {
+	Id    string
+	Child SquashConflictDifferentTypesChild `mapstructure:",squash"`
+}
+
 type Map struct {
 	Vfoo   string
 	Vother map[string]string
@@ -975,6 +1032,233 @@ func TestDecode_SquashOnNonStructType(t *testing.T) {
 		t.Fatal("unexpected success decoding invalid squash field type")
 	} else if !strings.Contains(err.Error(), "unsupported type for squash") {
 		t.Fatalf("unexpected error message for invalid squash field type: %s", err)
+	}
+}
+
+func TestDecodeFrom_SquashKeyConflict_OuterFirst(t *testing.T) {
+	t.Parallel()
+
+	input := SquashConflictOuterFirst{
+		Id: "userId",
+		Child: SquashConflictChild{
+			Id:   "orderId",
+			City: "Boston",
+		},
+	}
+
+	var result map[string]interface{}
+	err := Decode(input, &result)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+
+	if result["Id"] != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", result["Id"])
+	}
+	if result["City"] != "Boston" {
+		t.Errorf("expected non-conflicting squashed field 'Boston', got: %#v", result["City"])
+	}
+}
+
+func TestDecodeFrom_SquashKeyConflict_OuterLast(t *testing.T) {
+	t.Parallel()
+
+	input := SquashConflictOuterLast{
+		Child: SquashConflictChild{
+			Id:   "orderId",
+			City: "Boston",
+		},
+		Id: "userId",
+	}
+
+	var result map[string]interface{}
+	err := Decode(input, &result)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+
+	if result["Id"] != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", result["Id"])
+	}
+	if result["City"] != "Boston" {
+		t.Errorf("expected non-conflicting squashed field 'Boston', got: %#v", result["City"])
+	}
+}
+
+func TestDecodeFrom_SquashKeyConflict_Pointer(t *testing.T) {
+	t.Parallel()
+
+	input := SquashConflictPointerChild{
+		Id: "userId",
+		Child: &SquashConflictChild{
+			Id:   "orderId",
+			City: "Boston",
+		},
+	}
+
+	var result map[string]interface{}
+	err := Decode(input, &result)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+
+	if result["Id"] != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", result["Id"])
+	}
+	if result["City"] != "Boston" {
+		t.Errorf("expected non-conflicting squashed field 'Boston', got: %#v", result["City"])
+	}
+}
+
+func TestDecodeFrom_SquashKeyConflict_NestedHierarchy(t *testing.T) {
+	t.Parallel()
+
+	topWithId := SquashConflictTopWithId{
+		Id: "topId",
+		Middle: SquashConflictMiddle{
+			Id: "middleId",
+			GrandChild: SquashConflictGrandChild{
+				Id:      "grandChildId",
+				Country: "USA",
+			},
+		},
+	}
+
+	var resultWithId map[string]interface{}
+	err := Decode(topWithId, &resultWithId)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+	if resultWithId["Id"] != "topId" {
+		t.Errorf("expected topId, got: %#v", resultWithId["Id"])
+	}
+	if resultWithId["Country"] != "USA" {
+		t.Errorf("expected USA, got: %#v", resultWithId["Country"])
+	}
+
+	topNoId := SquashConflictTopNoId{
+		Middle: SquashConflictMiddle{
+			Id: "middleId",
+			GrandChild: SquashConflictGrandChild{
+				Id:      "grandChildId",
+				Country: "USA",
+			},
+		},
+	}
+
+	var resultNoId map[string]interface{}
+	err = Decode(topNoId, &resultNoId)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+	if resultNoId["Id"] != "middleId" {
+		t.Errorf("expected middleId, got: %#v", resultNoId["Id"])
+	}
+	if resultNoId["Country"] != "USA" {
+		t.Errorf("expected USA, got: %#v", resultNoId["Country"])
+	}
+}
+
+func TestDecodeFrom_SquashKeyConflict_TaggedFields(t *testing.T) {
+	t.Parallel()
+
+	input := SquashConflictTaggedOuter{
+		Id: "outerId",
+		Child: SquashConflictTaggedChild{
+			Id: "childId",
+		},
+	}
+
+	var result map[string]interface{}
+	err := Decode(input, &result)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+	if result["my_id"] != "outerId" {
+		t.Errorf("expected outerId, got: %#v", result["my_id"])
+	}
+}
+
+func TestDecode_SquashKeyConflict_MapToStruct(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"Id":   "userId",
+		"City": "Boston",
+	}
+
+	var resultOuterFirst SquashConflictOuterFirst
+	err := Decode(input, &resultOuterFirst)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+	if resultOuterFirst.Id != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", resultOuterFirst.Id)
+	}
+	if resultOuterFirst.Child.Id != "" {
+		t.Errorf("expected child Id to remain unset, got: %#v", resultOuterFirst.Child.Id)
+	}
+	if resultOuterFirst.Child.City != "Boston" {
+		t.Errorf("expected child City 'Boston', got: %#v", resultOuterFirst.Child.City)
+	}
+
+	var resultOuterLast SquashConflictOuterLast
+	err = Decode(input, &resultOuterLast)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+	if resultOuterLast.Id != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", resultOuterLast.Id)
+	}
+	if resultOuterLast.Child.Id != "" {
+		t.Errorf("expected child Id to remain unset, got: %#v", resultOuterLast.Child.Id)
+	}
+	if resultOuterLast.Child.City != "Boston" {
+		t.Errorf("expected child City 'Boston', got: %#v", resultOuterLast.Child.City)
+	}
+}
+
+func TestDecode_SquashKeyConflict_DifferentTypes(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]interface{}{
+		"Id": "userId",
+	}
+
+	var result SquashConflictDifferentTypesOuter
+	err := Decode(input, &result)
+	if err != nil {
+		t.Fatalf("got unexpected error decoding with conflicting types: %s", err)
+	}
+	if result.Id != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", result.Id)
+	}
+	if result.Child.Id != 0 {
+		t.Errorf("expected child Id to be 0, got: %d", result.Child.Id)
+	}
+}
+
+func TestDecode_SquashKeyConflict_StructToStruct(t *testing.T) {
+	t.Parallel()
+
+	input := SquashConflictOuterFirst{
+		Id: "userId",
+		Child: SquashConflictChild{
+			Id:   "orderId",
+			City: "Boston",
+		},
+	}
+
+	var result SquashConflictOuterFirst
+	err := Decode(input, &result)
+	if err != nil {
+		t.Fatalf("got an err: %s", err)
+	}
+	if result.Id != "userId" {
+		t.Errorf("expected outer field 'userId', got: %#v", result.Id)
+	}
+	if result.Child.City != "Boston" {
+		t.Errorf("expected child City 'Boston', got: %#v", result.Child.City)
 	}
 }
 
