@@ -34,6 +34,16 @@
 //         Username string `mapstructure:"user"`
 //     }
 //
+// Multiple Tag Aliases
+//
+// To support multiple alias keys for the same field, specify them separated
+// by commas in the tag. Map keys matching any of the aliases will be decoded
+// into the field:
+//
+//     type User struct {
+//         Username string `mapstructure:"user,username,login"`
+//     }
+//
 // Embedded Structs and Squashing
 //
 // Embedded structs are treated as if they're another field with that name.
@@ -1321,6 +1331,7 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 			// We always parse the tags cause we're looking for other tags too
 			tagParts := strings.Split(fieldType.Tag.Get(d.config.TagName), ",")
 			for _, tag := range tagParts[1:] {
+				tag = strings.TrimSpace(tag)
 				if tag == "squash" {
 					squash = true
 					break
@@ -1357,37 +1368,69 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 		field, fieldValue := f.field, f.val
 		fieldName := field.Name
 
+		var candidates []string
 		tagValue := field.Tag.Get(d.config.TagName)
-		tagValue = strings.SplitN(tagValue, ",", 2)[0]
 		if tagValue != "" {
-			fieldName = tagValue
-		}
-
-		rawMapKey := reflect.ValueOf(fieldName)
-		rawMapVal := dataVal.MapIndex(rawMapKey)
-		if !rawMapVal.IsValid() {
-			// Do a slower search by iterating over each key and
-			// doing case-insensitive search.
-			for dataValKey := range dataValKeys {
-				mK, ok := dataValKey.Interface().(string)
-				if !ok {
-					// Not a string key
+			for _, part := range strings.Split(tagValue, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" || part == "squash" || part == "remain" || part == "omitempty" {
 					continue
 				}
+				candidates = append(candidates, part)
+			}
+		}
 
-				if d.config.MatchName(mK, fieldName) {
-					rawMapKey = dataValKey
-					rawMapVal = dataVal.MapIndex(dataValKey)
+		if len(candidates) == 0 {
+			candidates = []string{fieldName}
+		} else {
+			fieldName = candidates[0]
+		}
+
+		var rawMapKey reflect.Value
+		var rawMapVal reflect.Value
+		var matchFound bool
+
+		// First, attempt exact matching across all candidate aliases in order.
+		for _, cand := range candidates {
+			k := reflect.ValueOf(cand)
+			v := dataVal.MapIndex(k)
+			if v.IsValid() {
+				rawMapKey = k
+				rawMapVal = v
+				matchFound = true
+				fieldName = cand
+				break
+			}
+		}
+
+		// If no exact match, attempt case-insensitive/custom matching across all candidates.
+		if !matchFound {
+			for _, cand := range candidates {
+				for dataValKey := range dataValKeys {
+					mK, ok := dataValKey.Interface().(string)
+					if !ok {
+						continue
+					}
+
+					if d.config.MatchName(mK, cand) {
+						rawMapKey = dataValKey
+						rawMapVal = dataVal.MapIndex(dataValKey)
+						matchFound = true
+						fieldName = cand
+						break
+					}
+				}
+				if matchFound {
 					break
 				}
 			}
+		}
 
-			if !rawMapVal.IsValid() {
-				// There was no matching key in the map for the value in
-				// the struct. Remember it for potential errors and metadata.
-				targetValKeysUnused[fieldName] = struct{}{}
-				continue
-			}
+		if !matchFound {
+			// There was no matching key in the map for the value in
+			// the struct. Remember it for potential errors and metadata.
+			targetValKeysUnused[fieldName] = struct{}{}
+			continue
 		}
 
 		if !fieldValue.IsValid() {

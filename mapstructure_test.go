@@ -2794,3 +2794,170 @@ func uintPtr(v uint) *uint                    { return &v }
 func boolPtr(v bool) *bool                    { return &v }
 func floatPtr(v float64) *float64             { return &v }
 func interfacePtr(v interface{}) *interface{} { return &v }
+
+func TestDecode_MultipleTagAliases(t *testing.T) {
+	t.Parallel()
+
+	type Target struct {
+		ClientID string `mapstructure:"uuid,clientId"`
+		Username string `mapstructure:"login, userName, user_name"`
+	}
+
+	t.Run("matches first alias", func(t *testing.T) {
+		input := map[string]interface{}{
+			"uuid":  "abc-123",
+			"login": "john_doe",
+		}
+		var result Target
+		if err := Decode(input, &result); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.ClientID != "abc-123" {
+			t.Errorf("expected ClientID 'abc-123', got %q", result.ClientID)
+		}
+		if result.Username != "john_doe" {
+			t.Errorf("expected Username 'john_doe', got %q", result.Username)
+		}
+	})
+
+	t.Run("matches secondary alias", func(t *testing.T) {
+		input := map[string]interface{}{
+			"clientId": "def-456",
+			"userName": "alice",
+		}
+		var result Target
+		if err := Decode(input, &result); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.ClientID != "def-456" {
+			t.Errorf("expected ClientID 'def-456', got %q", result.ClientID)
+		}
+		if result.Username != "alice" {
+			t.Errorf("expected Username 'alice', got %q", result.Username)
+		}
+	})
+
+	t.Run("matches tertiary alias with whitespace in tag", func(t *testing.T) {
+		input := map[string]interface{}{
+			"clientId":  "ghi-789",
+			"user_name": "bob",
+		}
+		var result Target
+		if err := Decode(input, &result); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.ClientID != "ghi-789" {
+			t.Errorf("expected ClientID 'ghi-789', got %q", result.ClientID)
+		}
+		if result.Username != "bob" {
+			t.Errorf("expected Username 'bob', got %q", result.Username)
+		}
+	})
+
+	t.Run("case insensitive alias matching", func(t *testing.T) {
+		input := map[string]interface{}{
+			"CLIENTID":  "jkl-012",
+			"USER_NAME": "carol",
+		}
+		var result Target
+		if err := Decode(input, &result); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.ClientID != "jkl-012" {
+			t.Errorf("expected ClientID 'jkl-012', got %q", result.ClientID)
+		}
+		if result.Username != "carol" {
+			t.Errorf("expected Username 'carol', got %q", result.Username)
+		}
+	})
+
+	t.Run("precedence when multiple aliases provided in map", func(t *testing.T) {
+		input := map[string]interface{}{
+			"uuid":     "primary-id",
+			"clientId": "secondary-id",
+			"login":    "primary-login",
+		}
+		var result Target
+		var md Metadata
+		config := &DecoderConfig{
+			Metadata: &md,
+			Result:   &result,
+		}
+		decoder, err := NewDecoder(config)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if err := decoder.Decode(input); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.ClientID != "primary-id" {
+			t.Errorf("expected ClientID 'primary-id', got %q", result.ClientID)
+		}
+		expectedUnused := []string{"clientId"}
+		if !reflect.DeepEqual(md.Unused, expectedUnused) {
+			t.Errorf("expected unused keys %v, got %v", expectedUnused, md.Unused)
+		}
+	})
+
+	t.Run("multiple aliases with omitempty", func(t *testing.T) {
+		type WithOmit struct {
+			Field string `mapstructure:"primary,secondary,omitempty"`
+		}
+		input := map[string]interface{}{
+			"secondary": "test-val",
+		}
+		var result WithOmit
+		if err := Decode(input, &result); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.Field != "test-val" {
+			t.Errorf("expected Field 'test-val', got %q", result.Field)
+		}
+	})
+
+	t.Run("error unset reports primary tag name", func(t *testing.T) {
+		input := map[string]interface{}{
+			"other": "val",
+		}
+		var result Target
+		config := &DecoderConfig{
+			ErrorUnset: true,
+			Result:     &result,
+		}
+		decoder, err := NewDecoder(config)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		err = decoder.Decode(input)
+		if err == nil {
+			t.Fatalf("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "uuid") || !strings.Contains(err.Error(), "login") {
+			t.Errorf("expected error to mention 'uuid' and 'login', got %s", err)
+		}
+	})
+
+	t.Run("squash with multiple aliases", func(t *testing.T) {
+		type Embedded struct {
+			InnerID string `mapstructure:"uuid,clientId"`
+		}
+		type Outer struct {
+			Embedded `mapstructure:",squash"`
+			Name     string `mapstructure:"name"`
+		}
+		input := map[string]interface{}{
+			"clientId": "squashed-id",
+			"name":     "outer-name",
+		}
+		var result Outer
+		if err := Decode(input, &result); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if result.InnerID != "squashed-id" {
+			t.Errorf("expected InnerID 'squashed-id', got %q", result.InnerID)
+		}
+		if result.Name != "outer-name" {
+			t.Errorf("expected Name 'outer-name', got %q", result.Name)
+		}
+	})
+}
