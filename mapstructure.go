@@ -1320,6 +1320,9 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 
 			// We always parse the tags cause we're looking for other tags too
 			tagParts := strings.Split(fieldType.Tag.Get(d.config.TagName), ",")
+			if tagParts[0] == "-" {
+				continue
+			}
 			for _, tag := range tagParts[1:] {
 				if tag == "squash" {
 					squash = true
@@ -1361,6 +1364,13 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 		tagValue = strings.SplitN(tagValue, ",", 2)[0]
 		if tagValue != "" {
 			fieldName = tagValue
+		}
+
+		if tagValue == "-" {
+			continue
+		}
+		if tagValue == "" && d.config.IgnoreUntaggedFields {
+			continue
 		}
 
 		rawMapKey := reflect.ValueOf(fieldName)

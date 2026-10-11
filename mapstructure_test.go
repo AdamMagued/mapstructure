@@ -1406,6 +1406,275 @@ func TestDecoder_ErrorUnset(t *testing.T) {
 	}
 }
 
+func TestDecoder_ErrorUnset_IgnoredField(t *testing.T) {
+	t.Parallel()
+
+	type Target struct {
+		Name    string `mapstructure:"name"`
+		Ignored string `mapstructure:"-"`
+	}
+
+	input := map[string]interface{}{
+		"name": "alice",
+	}
+
+	var result Target
+	config := &DecoderConfig{
+		ErrorUnset: true,
+		Result:     &result,
+	}
+
+	decoder, err := NewDecoder(config)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	err = decoder.Decode(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if result.Name != "alice" {
+		t.Fatalf("expected Name to be 'alice', got %q", result.Name)
+	}
+	if result.Ignored != "" {
+		t.Fatalf("expected Ignored to be empty, got %q", result.Ignored)
+	}
+
+	inputMissing := map[string]interface{}{}
+	var resultMissing Target
+	configMissing := &DecoderConfig{
+		ErrorUnset: true,
+		Result:     &resultMissing,
+	}
+	decoderMissing, err := NewDecoder(configMissing)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	err = decoderMissing.Decode(inputMissing)
+	if err == nil {
+		t.Fatal("expected error for missing tagged field")
+	}
+	if !strings.Contains(err.Error(), "unset fields: name") {
+		t.Fatalf("expected error to mention 'unset fields: name', got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "Ignored") || strings.Contains(err.Error(), "-") {
+		t.Fatalf("error should not mention ignored field, got %q", err.Error())
+	}
+}
+
+func TestDecoder_ErrorUnset_IgnoreUntaggedFields(t *testing.T) {
+	t.Parallel()
+
+	type Target struct {
+		Tagged   string `mapstructure:"tagged"`
+		Untagged string
+	}
+
+	input := map[string]interface{}{
+		"tagged": "val",
+	}
+
+	var result Target
+	config := &DecoderConfig{
+		ErrorUnset:           true,
+		IgnoreUntaggedFields: true,
+		Result:               &result,
+	}
+
+	decoder, err := NewDecoder(config)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	err = decoder.Decode(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if result.Tagged != "val" {
+		t.Fatalf("expected Tagged to be 'val', got %q", result.Tagged)
+	}
+	if result.Untagged != "" {
+		t.Fatalf("expected Untagged to be empty, got %q", result.Untagged)
+	}
+
+	var resultDefault Target
+	configDefault := &DecoderConfig{
+		ErrorUnset:           true,
+		IgnoreUntaggedFields: false,
+		Result:               &resultDefault,
+	}
+	decoderDefault, err := NewDecoder(configDefault)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	err = decoderDefault.Decode(input)
+	if err == nil {
+		t.Fatal("expected error when IgnoreUntaggedFields is false")
+	}
+	if !strings.Contains(err.Error(), "unset fields: Untagged") {
+		t.Fatalf("expected error to mention Untagged, got %q", err.Error())
+	}
+}
+
+func TestDecoder_ErrorUnset_IgnoredAndUntaggedFields(t *testing.T) {
+	t.Parallel()
+
+	type Target struct {
+		Key1     string `mapstructure:"key1"`
+		Key2     string `mapstructure:"key2"`
+		Ignored  string `mapstructure:"-"`
+		Untagged string
+	}
+
+	input := map[string]interface{}{
+		"key1": "val1",
+		"key2": "val2",
+	}
+
+	var result Target
+	config := &DecoderConfig{
+		ErrorUnset:           true,
+		IgnoreUntaggedFields: true,
+		Result:               &result,
+	}
+
+	decoder, err := NewDecoder(config)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	err = decoder.Decode(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if result.Key1 != "val1" || result.Key2 != "val2" {
+		t.Fatalf("unexpected values: key1=%q, key2=%q", result.Key1, result.Key2)
+	}
+	if result.Ignored != "" || result.Untagged != "" {
+		t.Fatalf("ignored or untagged fields were populated: Ignored=%q, Untagged=%q", result.Ignored, result.Untagged)
+	}
+
+	inputPartial := map[string]interface{}{
+		"key1": "val1",
+	}
+	var resultPartial Target
+	configPartial := &DecoderConfig{
+		ErrorUnset:           true,
+		IgnoreUntaggedFields: true,
+		Result:               &resultPartial,
+	}
+	decoderPartial, err := NewDecoder(configPartial)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	err = decoderPartial.Decode(inputPartial)
+	if err == nil {
+		t.Fatal("expected error for missing key2")
+	}
+	if !strings.Contains(err.Error(), "unset fields: key2") {
+		t.Fatalf("expected error to mention key2, got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "Ignored") || strings.Contains(err.Error(), "Untagged") || strings.Contains(err.Error(), "-") {
+		t.Fatalf("error should not mention ignored or untagged fields, got %q", err.Error())
+	}
+}
+
+func TestDecoder_ErrorUnset_NestedAndSquashed(t *testing.T) {
+	t.Parallel()
+
+	type Embedded struct {
+		InnerTagged   string `mapstructure:"inner_tagged"`
+		InnerIgnored  string `mapstructure:"-"`
+		InnerUntagged string
+	}
+
+	type Nested struct {
+		FieldTagged   string `mapstructure:"field_tagged"`
+		FieldIgnored  string `mapstructure:"-"`
+		FieldUntagged string
+	}
+
+	type Container struct {
+		Embedded `mapstructure:",squash"`
+		Nested   Nested `mapstructure:"nested"`
+	}
+
+	input := map[string]interface{}{
+		"inner_tagged": "embedded_val",
+		"nested": map[string]interface{}{
+			"field_tagged": "nested_val",
+		},
+	}
+
+	var result Container
+	config := &DecoderConfig{
+		ErrorUnset:           true,
+		IgnoreUntaggedFields: true,
+		Result:               &result,
+	}
+
+	decoder, err := NewDecoder(config)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	err = decoder.Decode(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if result.InnerTagged != "embedded_val" {
+		t.Fatalf("expected inner_tagged 'embedded_val', got %q", result.InnerTagged)
+	}
+	if result.Nested.FieldTagged != "nested_val" {
+		t.Fatalf("expected field_tagged 'nested_val', got %q", result.Nested.FieldTagged)
+	}
+	if result.InnerIgnored != "" || result.InnerUntagged != "" || result.Nested.FieldIgnored != "" || result.Nested.FieldUntagged != "" {
+		t.Fatalf("ignored or untagged fields unexpectedly set")
+	}
+}
+
+func TestDecoder_ErrorUnset_Metadata(t *testing.T) {
+	t.Parallel()
+
+	type Target struct {
+		SetField     string `mapstructure:"set_field"`
+		UnsetField   string `mapstructure:"unset_field"`
+		IgnoredField string `mapstructure:"-"`
+		Untagged     string
+	}
+
+	input := map[string]interface{}{
+		"set_field": "hello",
+	}
+
+	var md Metadata
+	var result Target
+	config := &DecoderConfig{
+		Metadata:             &md,
+		IgnoreUntaggedFields: true,
+		Result:               &result,
+	}
+
+	decoder, err := NewDecoder(config)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	err = decoder.Decode(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	expectedUnset := []string{"unset_field"}
+	if !reflect.DeepEqual(md.Unset, expectedUnset) {
+		t.Fatalf("expected unset: %#v, got: %#v", expectedUnset, md.Unset)
+	}
+}
+
 func TestMap(t *testing.T) {
 	t.Parallel()
 
