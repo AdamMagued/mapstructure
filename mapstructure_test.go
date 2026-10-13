@@ -2794,3 +2794,341 @@ func uintPtr(v uint) *uint                    { return &v }
 func boolPtr(v bool) *bool                    { return &v }
 func floatPtr(v float64) *float64             { return &v }
 func interfacePtr(v interface{}) *interface{} { return &v }
+
+func TestDecoder_Issue357_MultipleTags(t *testing.T) {
+	type Account struct {
+		ClientID string `json:"clientId" mapstructure:"uuid"`
+	}
+
+	// When using TagName: "mapstructure,json", mapstructure tag takes precedence
+	{
+		var result Account
+		input := map[string]interface{}{
+			"uuid": "12345",
+		}
+		dec, err := NewDecoder(&DecoderConfig{
+			TagName: "mapstructure,json",
+			Result:  &result,
+		})
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		if err := dec.Decode(input); err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		if result.ClientID != "12345" {
+			t.Fatalf("expected ClientID=12345, got %s", result.ClientID)
+		}
+	}
+
+	// When struct field only has json tag while TagName is "mapstructure,json"
+	{
+		type User struct {
+			Username string `mapstructure:"user"`
+			ClientID string `json:"cid"`
+		}
+		var result User
+		input := map[string]interface{}{
+			"user": "alice",
+			"cid":  "67890",
+		}
+		dec, err := NewDecoder(&DecoderConfig{
+			TagName: "mapstructure,json",
+			Result:  &result,
+		})
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		if err := dec.Decode(input); err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		if result.Username != "alice" {
+			t.Fatalf("expected Username=alice, got %s", result.Username)
+		}
+		if result.ClientID != "67890" {
+			t.Fatalf("expected ClientID=67890, got %s", result.ClientID)
+		}
+	}
+
+	// When TagName order prioritizes json over mapstructure
+	{
+		type Client struct {
+			ClientID string `json:"cid" mapstructure:"uuid"`
+		}
+		var result Client
+		input := map[string]interface{}{
+			"cid":  "abcde",
+			"uuid": "fghij",
+		}
+		dec, err := NewDecoder(&DecoderConfig{
+			TagName: "json,mapstructure",
+			Result:  &result,
+		})
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		if err := dec.Decode(input); err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		if result.ClientID != "abcde" {
+			t.Fatalf("expected ClientID=abcde, got %s", result.ClientID)
+		}
+	}
+}
+
+func TestDecoder_MultiTagBasic(t *testing.T) {
+	type Person struct {
+		Name  string `yaml:"name"`
+		Age   int    `json:"age"`
+		Email string `config:"email_address"`
+	}
+
+	input := map[string]interface{}{
+		"name":          "Alice",
+		"age":           30,
+		"email_address": "alice@example.com",
+	}
+	var result Person
+
+	dec, err := NewDecoder(&DecoderConfig{
+		TagName: "yaml,json,config",
+		Result:  &result,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+
+	if err := dec.Decode(input); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+
+	if result.Name != "Alice" {
+		t.Fatalf("expected Name=Alice, got %q", result.Name)
+	}
+	if result.Age != 30 {
+		t.Fatalf("expected Age=30, got %d", result.Age)
+	}
+	if result.Email != "alice@example.com" {
+		t.Fatalf("expected Email=alice@example.com, got %q", result.Email)
+	}
+}
+
+func TestDecoder_MultiTagPriority(t *testing.T) {
+	// When both tags exist, the first tag name in the list takes precedence
+	type Item struct {
+		Value string `yaml:"yaml_value" json:"json_value"`
+	}
+
+	input := map[string]interface{}{
+		"yaml_value": "from_yaml",
+		"json_value": "from_json",
+	}
+
+	// Test yaml,json order - should use yaml tag
+	var result1 Item
+	dec1, err := NewDecoder(&DecoderConfig{
+		TagName: "yaml,json",
+		Result:  &result1,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+	if err := dec1.Decode(input); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if result1.Value != "from_yaml" {
+		t.Fatalf("with yaml,json expected Value=from_yaml, got %q", result1.Value)
+	}
+
+	// Test json,yaml order - should use json tag
+	var result2 Item
+	dec2, err := NewDecoder(&DecoderConfig{
+		TagName: "json,yaml",
+		Result:  &result2,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+	if err := dec2.Decode(input); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	if result2.Value != "from_json" {
+		t.Fatalf("with json,yaml expected Value=from_json, got %q", result2.Value)
+	}
+}
+
+func TestDecoder_MultiTagSquash(t *testing.T) {
+	type Inner struct {
+		A int `yaml:"a"`
+	}
+
+	type Wrap struct {
+		Inner `yaml:",squash"`
+	}
+
+	input := map[string]interface{}{"a": 1}
+	var result Wrap
+
+	dec, err := NewDecoder(&DecoderConfig{
+		TagName:          "config,yaml",
+		WeaklyTypedInput: true,
+		Result:           &result,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+
+	if err := dec.Decode(input); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+
+	if result.Inner.A != 1 {
+		t.Fatalf("expected squash field A=1, got %d", result.Inner.A)
+	}
+}
+
+func TestDecoder_MultiTagRemain(t *testing.T) {
+	type Wrap struct {
+		Known string                 `yaml:"known"`
+		Extra map[string]interface{} `yaml:",remain"`
+	}
+
+	input := map[string]interface{}{
+		"known":  "ok",
+		"extra1": "v1",
+		"extra2": 2,
+	}
+	var result Wrap
+
+	dec, err := NewDecoder(&DecoderConfig{
+		TagName:          "config,yaml",
+		WeaklyTypedInput: true,
+		Result:           &result,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+
+	if err := dec.Decode(input); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+
+	if result.Known != "ok" {
+		t.Fatalf("expected Known=ok, got %q", result.Known)
+	}
+	if result.Extra == nil || len(result.Extra) != 2 {
+		t.Fatalf("expected Extra to contain 2 items, got %v", result.Extra)
+	}
+	if result.Extra["extra1"] != "v1" {
+		t.Fatalf("expected extra1=v1, got %v", result.Extra["extra1"])
+	}
+}
+
+func TestDecoder_MultiTagWhitespace(t *testing.T) {
+	type Person struct {
+		Name string `yaml:"name"`
+		Age  int    `json:"age"`
+	}
+
+	input := map[string]interface{}{
+		"name": "Bob",
+		"age":  25,
+	}
+	var result Person
+
+	dec, err := NewDecoder(&DecoderConfig{
+		TagName: " yaml , json ",
+		Result:  &result,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+
+	if err := dec.Decode(input); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+
+	if result.Name != "Bob" {
+		t.Fatalf("expected Name=Bob, got %q", result.Name)
+	}
+	if result.Age != 25 {
+		t.Fatalf("expected Age=25, got %d", result.Age)
+	}
+}
+
+func TestDecoder_MultiTagEmptyNames(t *testing.T) {
+	type Person struct {
+		Name string `mapstructure:"name"`
+	}
+
+	input := map[string]interface{}{
+		"name": "Charlie",
+	}
+
+	tests := []struct {
+		name    string
+		tagName string
+	}{
+		{"leading comma", ",yaml"},
+		{"trailing comma", "yaml,"},
+		{"multiple commas", ",,yaml,,"},
+		{"only commas", ",,,"},
+		{"empty with spaces", " , , "},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var result Person
+			dec, err := NewDecoder(&DecoderConfig{
+				TagName: tc.tagName,
+				Result:  &result,
+			})
+			if err != nil {
+				t.Fatalf("NewDecoder error: %v", err)
+			}
+
+			if err := dec.Decode(input); err != nil {
+				t.Fatalf("Decode error: %v", err)
+			}
+
+			// With invalid/empty tag names, should fall back to mapstructure
+			if result.Name != "Charlie" {
+				t.Fatalf("expected Name=Charlie (fallback to mapstructure), got %q", result.Name)
+			}
+		})
+	}
+}
+
+func TestDecoder_MultiTagStructToMap(t *testing.T) {
+	type Source struct {
+		Name  string `json:"name"`
+		Email string `yaml:"email_address"`
+	}
+
+	src := Source{
+		Name:  "Dave",
+		Email: "dave@example.com",
+	}
+
+	actual := make(map[string]interface{})
+	dec, err := NewDecoder(&DecoderConfig{
+		TagName: "yaml,json",
+		Result:  &actual,
+	})
+	if err != nil {
+		t.Fatalf("NewDecoder error: %v", err)
+	}
+
+	if err := dec.Decode(src); err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+
+	expected := map[string]interface{}{
+		"name":          "Dave",
+		"email_address": "dave@example.com",
+	}
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatalf("expected %#v, got %#v", expected, actual)
+	}
+}
