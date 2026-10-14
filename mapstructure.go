@@ -1314,12 +1314,18 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				fieldVal = fieldVal.Elem()
 			}
 
+			// We always parse the tags cause we're looking for other tags too
+			tagParts := strings.Split(fieldType.Tag.Get(d.config.TagName), ",")
+
+			// If "-" is specified as the field name, the field is ignored.
+			if tagParts[0] == "-" {
+				continue
+			}
+
 			// If "squash" is specified in the tag, we squash the field down.
 			squash := d.config.Squash && fieldVal.Kind() == reflect.Struct && fieldType.Anonymous
 			remain := false
 
-			// We always parse the tags cause we're looking for other tags too
-			tagParts := strings.Split(fieldType.Tag.Get(d.config.TagName), ",")
 			for _, tag := range tagParts[1:] {
 				if tag == "squash" {
 					squash = true
